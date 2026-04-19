@@ -1,7 +1,7 @@
 # EasyLevel Home Assistant Integration
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
-[![Validate](https://github.com/yourusername/easylevel-home-assistant/actions/workflows/validate.yaml/badge.svg)](https://github.com/yourusername/easylevel-home-assistant/actions/workflows/validate.yaml)
+[![Validate](https://github.com/dominikkukacka/easylevel-home-assistant/actions/workflows/validate.yaml/badge.svg)](https://github.com/dominikkukacka/easylevel-home-assistant/actions/workflows/validate.yaml)
 
 Home Assistant integration for the [EasyLevel](https://easylevel.com) caravan and motorhome leveling sensor by CaraTech AB.
 
@@ -29,7 +29,7 @@ The EasyLevel sensor is a BLE (Bluetooth Low Energy) accelerometer that mounts o
 
 1. Open HACS in Home Assistant
 2. Click the three-dot menu → **Custom repositories**
-3. Add `https://github.com/yourusername/easylevel-home-assistant` as type **Integration**
+3. Add `https://github.com/dominikkukacka/easylevel-home-assistant` as type **Integration**
 4. Click **Download**
 5. Restart Home Assistant
 
