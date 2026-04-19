@@ -1,0 +1,16 @@
+{
+  "domain": "easylevel",
+  "name": "EasyLevel",
+  "version": "1.0.0",
+  "config_flow": true,
+  "dependencies": ["bluetooth"],
+  "bluetooth": [
+    {
+      "local_name": "CARATI*"
+    }
+  ],
+  "codeowners": [],
+  "documentation": "https://github.com/dominikkukacka/easylevel-home-assistant",
+  "iot_class": "local_push",
+  "requirements": []
+}

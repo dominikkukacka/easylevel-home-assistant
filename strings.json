@@ -1,0 +1,21 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "EasyLevel",
+        "description": "Select your EasyLevel sensor",
+        "data": {
+          "address": "Device"
+        }
+      },
+      "bluetooth_confirm": {
+        "title": "EasyLevel",
+        "description": "Do you want to add the EasyLevel sensor **{name}** to Home Assistant?"
+      }
+    },
+    "abort": {
+      "already_configured": "This EasyLevel device is already configured.",
+      "no_devices_found": "No EasyLevel (CARATI*) devices found nearby. Make sure the sensor is powered on and within Bluetooth range, then try again."
+    }
+  }
+}
