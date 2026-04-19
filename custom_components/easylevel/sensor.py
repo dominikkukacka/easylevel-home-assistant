@@ -4,15 +4,15 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from typing import Callable
 
 from homeassistant.components.sensor import (
-    SensorDeviceClass,
     SensorEntity,
     SensorEntityDescription,
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import DEGREE, SIGNAL_STRENGTH_DECIBELS_MILLIWATT
+from homeassistant.const import DEGREE
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -20,6 +20,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 from .coordinator import EasyLevelCoordinator
+from .sensor_data import EasyLevelData
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -27,6 +28,7 @@ _LOGGER = logging.getLogger(__name__)
 @dataclass(frozen=True, kw_only=True)
 class EasyLevelSensorDescription(SensorEntityDescription):
     """Describes an EasyLevel sensor."""
+    value_fn: Callable[[EasyLevelCoordinator], float | None]
 
 
 SENSOR_DESCRIPTIONS: tuple[EasyLevelSensorDescription, ...] = (
@@ -34,49 +36,49 @@ SENSOR_DESCRIPTIONS: tuple[EasyLevelSensorDescription, ...] = (
         key="pitch",
         name="Pitch",
         native_unit_of_measurement=DEGREE,
-        device_class=None,
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:angle-acute",
         suggested_display_precision=1,
+        value_fn=lambda c: c.parser.pitch,
     ),
     EasyLevelSensorDescription(
         key="roll",
         name="Roll",
         native_unit_of_measurement=DEGREE,
-        device_class=None,
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:rotate-3d-variant",
         suggested_display_precision=1,
+        value_fn=lambda c: c.parser.roll,
     ),
     EasyLevelSensorDescription(
         key="pitch_raw",
         name="Pitch (unsmoothed)",
         native_unit_of_measurement=DEGREE,
-        device_class=None,
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:angle-acute",
         suggested_display_precision=2,
-        entity_registry_enabled_default=False,  # hidden by default
+        entity_registry_enabled_default=False,
+        value_fn=lambda c: c.parser.last_raw.pitch if c.parser.last_raw else None,
     ),
     EasyLevelSensorDescription(
         key="roll_raw",
         name="Roll (unsmoothed)",
         native_unit_of_measurement=DEGREE,
-        device_class=None,
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:rotate-3d-variant",
         suggested_display_precision=2,
         entity_registry_enabled_default=False,
+        value_fn=lambda c: c.parser.last_raw.roll if c.parser.last_raw else None,
     ),
     EasyLevelSensorDescription(
         key="gravity_magnitude",
         name="Gravity magnitude",
         native_unit_of_measurement=None,
-        device_class=None,
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:earth",
         suggested_display_precision=0,
         entity_registry_enabled_default=False,
+        value_fn=lambda c: c.parser.last_raw.gravity_magnitude if c.parser.last_raw else None,
     ),
 )
 
@@ -88,12 +90,10 @@ async def async_setup_entry(
 ) -> None:
     """Set up EasyLevel sensors from a config entry."""
     coordinator: EasyLevelCoordinator = hass.data[DOMAIN][entry.entry_id]
-
-    entities = [
-        EasyLevelSensorEntity(coordinator, entry, description)
-        for description in SENSOR_DESCRIPTIONS
-    ]
-    async_add_entities(entities)
+    async_add_entities([
+        EasyLevelSensorEntity(coordinator, entry, desc)
+        for desc in SENSOR_DESCRIPTIONS
+    ])
 
 
 class EasyLevelSensorEntity(CoordinatorEntity[EasyLevelCoordinator], SensorEntity):
@@ -108,7 +108,6 @@ class EasyLevelSensorEntity(CoordinatorEntity[EasyLevelCoordinator], SensorEntit
         entry: ConfigEntry,
         description: EasyLevelSensorDescription,
     ) -> None:
-        """Initialise the sensor."""
         super().__init__(coordinator)
         self.entity_description = description
         self._attr_unique_id = f"{entry.unique_id}_{description.key}"
@@ -122,30 +121,17 @@ class EasyLevelSensorEntity(CoordinatorEntity[EasyLevelCoordinator], SensorEntit
     @property
     def native_value(self) -> float | None:
         """Return current sensor value."""
-        parser = self.coordinator.parser
-        key = self.entity_description.key
-
-        if key == "pitch":
-            return parser.pitch
-        if key == "roll":
-            return parser.roll
-        if key == "pitch_raw":
-            raw = parser.last_raw
-            return raw.pitch if raw else None
-        if key == "roll_raw":
-            raw = parser.last_raw
-            return raw.roll if raw else None
-        if key == "gravity_magnitude":
-            raw = parser.last_raw
-            return raw.gravity_magnitude if raw else None
-        return None
+        return self.entity_description.value_fn(self.coordinator)
 
     @property
     def available(self) -> bool:
-        """Return True if we have received at least one reading."""
+        """
+        Available as soon as we have received at least one successful reading.
+        Stays available between polls — shows the last known value.
+        Becomes unavailable only if we have never gotten data at all.
+        """
         return self.coordinator.parser.pitch is not None
 
     @callback
     def _handle_coordinator_update(self) -> None:
-        """Handle data update from coordinator."""
         self.async_write_ha_state()
