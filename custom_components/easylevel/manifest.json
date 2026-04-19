@@ -9,8 +9,9 @@
       "local_name": "CARATI*"
     }
   ],
-  "codeowners": ["@yourusername"],
-  "documentation": "https://github.com/yourusername/easylevel-home-assistant",
+  "codeowners": ["@dominikkukacka"],
+  "documentation": "https://github.com/dominikkukacka/easylevel-home-assistant",
+  "issue_tracker": "https://github.com/dominikkukacka/easylevel-home-assistant/issues",
   "homeassistant": "2024.1.0",
   "integration_type": "device",
   "iot_class": "local_push",
