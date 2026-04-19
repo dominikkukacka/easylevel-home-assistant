@@ -22,15 +22,27 @@
     "step": {
       "init": {
         "title": "EasyLevel Options",
-        "description": "Configure how often the sensor is polled. Minimum interval: {min_interval}s, maximum: {max_interval}s.",
+        "description": "These settings can also be changed live from any dashboard using the Polling and Poll interval entities on the device card.",
         "data": {
           "polling_enabled": "Enable polling",
           "poll_interval": "Poll interval (seconds)"
         },
         "data_description": {
           "polling_enabled": "When disabled, the integration stops connecting to the sensor. Existing sensor values are kept but will no longer update.",
-          "poll_interval": "How often (in seconds) to connect and read a fresh tilt reading. Lower values update more frequently but use more battery. Range: {min_interval}–{max_interval} seconds."
+          "poll_interval": "How often (in seconds) to connect and read a fresh tilt reading. Range: {min_interval}–{max_interval} seconds."
         }
+      }
+    }
+  },
+  "entity": {
+    "switch": {
+      "polling_enabled": {
+        "name": "Polling"
+      }
+    },
+    "number": {
+      "poll_interval": {
+        "name": "Poll interval"
       }
     }
   }
