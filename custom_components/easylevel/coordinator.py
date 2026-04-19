@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 
 from bleak import BleakClient
 from bleak.exc import BleakError
+from bleak_retry_connector import establish_connection
 
 from homeassistant.components import bluetooth
 from homeassistant.config_entries import ConfigEntry
@@ -33,17 +34,11 @@ _LOGGER = logging.getLogger(__name__)
 
 class EasyLevelCoordinator(DataUpdateCoordinator[None]):
     """
-    Standard DataUpdateCoordinator that polls the EasyLevel sensor via BLE GATT.
+    Timed DataUpdateCoordinator for the EasyLevel BLE sensor.
 
-    Using DataUpdateCoordinator (not ActiveBluetoothDataUpdateCoordinator) because:
-    - The device sends no useful data in BLE advertisements
-    - We need predictable timed polling, not advertisement-driven polling
-    - DataUpdateCoordinator gives us last_update_success, async_add_listener,
-      and CoordinatorEntity compatibility for free
-
-    The update_interval is updated live when the user changes poll_interval.
-    When polling_enabled is False the _async_update_data returns immediately
-    without connecting, preserving the last known values.
+    Connects every poll_interval seconds, subscribes to GATT notifications
+    for 2 seconds, then disconnects. Entities update automatically via the
+    standard CoordinatorEntity mechanism.
     """
 
     def __init__(
@@ -57,7 +52,7 @@ class EasyLevelCoordinator(DataUpdateCoordinator[None]):
         self.parser = EasyLevelParser(smoothing_window=5)
         self.firmware_info: str | None = None
 
-        # Live state — written by Switch/Number entities
+        # Live state — written directly by Switch/Number/Button entities
         self.polling_enabled: bool = entry.options.get(
             CONF_POLLING_ENABLED, DEFAULT_POLLING_ENABLED
         )
@@ -72,7 +67,7 @@ class EasyLevelCoordinator(DataUpdateCoordinator[None]):
             update_interval=timedelta(seconds=self.poll_interval),
         )
 
-    # ── Options persistence ───────────────────────────────────────────────────
+    # ── Persist options ───────────────────────────────────────────────────────
 
     async def async_save_options(self) -> None:
         """Persist current live state to config entry options."""
@@ -83,71 +78,99 @@ class EasyLevelCoordinator(DataUpdateCoordinator[None]):
                 CONF_POLL_INTERVAL: self.poll_interval,
             },
         )
-        # Apply new interval immediately
         self.update_interval = timedelta(seconds=self.poll_interval)
 
-    # ── DataUpdateCoordinator hook ────────────────────────────────────────────
+    # ── Core poll method ──────────────────────────────────────────────────────
 
     async def _async_update_data(self) -> None:
-        """Called by the coordinator on every update_interval tick."""
+        """Called by coordinator on every update_interval tick."""
         if not self.polling_enabled:
             _LOGGER.debug("EasyLevel: polling disabled, skipping")
-            return None   # keep last values, don't raise
+            return None
 
         device = bluetooth.async_ble_device_from_address(
             self.hass, self._ble_device.address, connectable=True
         ) or self._ble_device
 
-        _LOGGER.debug("EasyLevel: polling %s (interval=%ds)", device.address, self.poll_interval)
+        _LOGGER.debug(
+            "EasyLevel: polling %s (interval=%ds)", device.address, self.poll_interval
+        )
+
+        await self._connect_and_read(device)
+        return None
+
+    # ── Shared GATT logic (also called by the refresh button) ─────────────────
+
+    async def async_refresh_now(self) -> None:
+        """Trigger an immediate poll outside the normal schedule."""
+        device = bluetooth.async_ble_device_from_address(
+            self.hass, self._ble_device.address, connectable=True
+        ) or self._ble_device
+        try:
+            await self._connect_and_read(device)
+        except UpdateFailed as err:
+            _LOGGER.warning("EasyLevel: manual refresh failed: %s", err)
+        # Notify entities regardless so UI refreshes
+        self.async_set_updated_data(None)
+
+    async def _connect_and_read(self, device) -> None:
+        """Connect via GATT, collect 2s of notifications."""
+        try:
+            client = await establish_connection(
+                BleakClient,
+                device,
+                device.address,
+                max_attempts=2,
+            )
+        except Exception as err:
+            raise UpdateFailed(f"Could not connect: {err}") from err
 
         try:
-            async with BleakClient(device, timeout=15.0) as client:
-                # One-time firmware read
-                if self.firmware_info is None:
-                    try:
-                        raw = await client.read_gatt_char(CHAR_DEVICE_INFO)
-                        self.firmware_info = raw.hex("-")
-                        _LOGGER.debug("EasyLevel: firmware: %s", self.firmware_info)
-                    except BleakError as err:
-                        _LOGGER.debug("EasyLevel: firmware read skipped: %s", err)
+            # One-time firmware read
+            if self.firmware_info is None:
+                try:
+                    raw = await client.read_gatt_char(CHAR_DEVICE_INFO)
+                    self.firmware_info = raw.hex("-")
+                    _LOGGER.debug("EasyLevel: firmware: %s", self.firmware_info)
+                except BleakError as err:
+                    _LOGGER.debug("EasyLevel: firmware read skipped: %s", err)
 
-                # Collect GATT notifications via queue for 2 seconds
-                queue: asyncio.Queue[bytes] = asyncio.Queue()
+            # Collect notifications via queue (Bleak callback is not async-safe)
+            queue: asyncio.Queue[bytes] = asyncio.Queue()
 
-                def _on_notify(_sender, data: bytearray) -> None:
-                    try:
-                        queue.put_nowait(bytes(data))
-                    except asyncio.QueueFull:
-                        pass
+            def _on_notify(_sender, data: bytearray) -> None:
+                try:
+                    queue.put_nowait(bytes(data))
+                except asyncio.QueueFull:
+                    pass
 
-                await client.start_notify(CHAR_ACCEL, _on_notify)
-                _LOGGER.debug("EasyLevel: collecting notifications for 2s…")
+            await client.start_notify(CHAR_ACCEL, _on_notify)
+            _LOGGER.debug("EasyLevel: collecting notifications for 2s…")
 
-                deadline = asyncio.get_event_loop().time() + 2.0
-                packets = 0
-                while True:
-                    remaining = deadline - asyncio.get_event_loop().time()
-                    if remaining <= 0:
-                        break
-                    try:
-                        raw = await asyncio.wait_for(queue.get(), timeout=remaining)
-                        self.parser.update(raw)
-                        packets += 1
-                    except asyncio.TimeoutError:
-                        break
+            deadline = asyncio.get_event_loop().time() + 2.0
+            packets = 0
+            while True:
+                remaining = deadline - asyncio.get_event_loop().time()
+                if remaining <= 0:
+                    break
+                try:
+                    raw = await asyncio.wait_for(queue.get(), timeout=remaining)
+                    self.parser.update(raw)
+                    packets += 1
+                except asyncio.TimeoutError:
+                    break
 
-                await client.stop_notify(CHAR_ACCEL)
-                _LOGGER.debug(
-                    "EasyLevel: done — %d packets, pitch=%.2f°, roll=%.2f°",
-                    packets,
-                    self.parser.pitch or 0.0,
-                    self.parser.roll or 0.0,
-                )
-                return None
+            await client.stop_notify(CHAR_ACCEL)
+            _LOGGER.debug(
+                "EasyLevel: done — %d packets, pitch=%.2f°, roll=%.2f°",
+                packets,
+                self.parser.pitch or 0.0,
+                self.parser.roll or 0.0,
+            )
 
         except BleakError as err:
-            raise UpdateFailed(f"BLE connection error: {err}") from err
+            raise UpdateFailed(f"BLE error: {err}") from err
         except asyncio.TimeoutError as err:
-            raise UpdateFailed("Connection timed out after 15s") from err
-        except Exception as err:
-            raise UpdateFailed(f"Unexpected error: {err}") from err
+            raise UpdateFailed("Read timed out") from err
+        finally:
+            await client.disconnect()

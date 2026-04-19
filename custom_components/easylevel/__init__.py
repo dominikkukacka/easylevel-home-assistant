@@ -15,7 +15,7 @@ from .coordinator import EasyLevelCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.SWITCH, Platform.NUMBER]
+PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.SWITCH, Platform.NUMBER, Platform.BUTTON]
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -27,8 +27,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     )
     if not ble_device:
         raise ConfigEntryNotReady(
-            f"EasyLevel device {address} not in range. "
-            "Make sure it is powered on and within Bluetooth range."
+            f"EasyLevel device {address} not in Bluetooth range. "
+            "Power it on and try again."
         )
 
     coordinator = EasyLevelCoordinator(
@@ -37,12 +37,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         entry=entry,
     )
 
-    # First refresh — raises ConfigEntryNotReady on failure
-    await coordinator.async_config_entry_first_refresh()
-
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
 
+    # Set up platforms first so entities exist before data arrives
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
+    # Kick off first poll — don't block setup if it fails, coordinator
+    # will retry on its normal schedule
+    await coordinator.async_refresh()
+
     return True
 
 

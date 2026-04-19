@@ -29,7 +29,7 @@
         },
         "data_description": {
           "polling_enabled": "When disabled, the integration stops connecting to the sensor. Existing sensor values are kept but will no longer update.",
-          "poll_interval": "How often (in seconds) to connect and read a fresh tilt reading. Range: {min_interval}–{max_interval} seconds."
+          "poll_interval": "How often (in seconds) to connect and read a fresh tilt reading. Range: {min_interval}\u2013{max_interval} seconds."
         }
       }
     }
@@ -43,6 +43,11 @@
     "number": {
       "poll_interval": {
         "name": "Poll interval"
+      }
+    },
+    "button": {
+      "refresh": {
+        "name": "Refresh now"
       }
     }
   }

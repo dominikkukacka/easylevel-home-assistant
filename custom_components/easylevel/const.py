@@ -49,7 +49,7 @@ CONF_POLL_INTERVAL    = "poll_interval"
 
 # Defaults
 DEFAULT_POLLING_ENABLED = True
-DEFAULT_POLL_INTERVAL   = 30    # seconds
+DEFAULT_POLL_INTERVAL   = 5     # seconds
 
 # Limits for the options form
 MIN_POLL_INTERVAL = 5
