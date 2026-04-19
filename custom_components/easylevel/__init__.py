@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 
 from homeassistant.components import bluetooth
@@ -28,32 +27,22 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     )
     if not ble_device:
         raise ConfigEntryNotReady(
-            f"EasyLevel device {address} not found. "
+            f"EasyLevel device {address} not in range. "
             "Make sure it is powered on and within Bluetooth range."
         )
 
     coordinator = EasyLevelCoordinator(
         hass=hass,
-        logger=_LOGGER,
         ble_device=ble_device,
         entry=entry,
     )
 
+    # First refresh — raises ConfigEntryNotReady on failure
+    await coordinator.async_config_entry_first_refresh()
+
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
 
-    # Set up all platforms first so entities can subscribe before data arrives
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-
-    # Start the advertisement-driven coordinator
-    entry.async_on_unload(coordinator.async_start())
-
-    # Schedule an immediate poll so sensors show data right away
-    # (doesn't wait for the first BLE advertisement to arrive)
-    async def _initial_poll(_now=None) -> None:
-        await coordinator.async_poll_now()
-
-    hass.async_create_task(_initial_poll())
-
     return True
 
 
