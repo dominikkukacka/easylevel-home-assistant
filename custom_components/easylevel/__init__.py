@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from homeassistant.components import bluetooth
@@ -40,27 +41,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
 
+    # Set up all platforms first so entities can subscribe before data arrives
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
-    # Start coordinator *after* platforms have subscribed
+    # Start the advertisement-driven coordinator
     entry.async_on_unload(coordinator.async_start())
 
-    # Re-read options whenever the user changes them (no restart needed)
-    entry.async_on_unload(entry.add_update_listener(_async_update_listener))
+    # Schedule an immediate poll so sensors show data right away
+    # (doesn't wait for the first BLE advertisement to arrive)
+    async def _initial_poll(_now=None) -> None:
+        await coordinator.async_poll_now()
+
+    hass.async_create_task(_initial_poll())
 
     return True
-
-
-async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Handle options update — coordinator reads options live, nothing to reload."""
-    coordinator: EasyLevelCoordinator = hass.data[DOMAIN][entry.entry_id]
-    _LOGGER.debug(
-        "EasyLevel: options updated — polling_enabled=%s  interval=%ds",
-        coordinator.polling_enabled,
-        coordinator.poll_interval,
-    )
-    # The coordinator properties read from entry.options directly,
-    # so changes take effect on the very next poll cycle automatically.
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

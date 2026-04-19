@@ -36,9 +36,9 @@ class EasyLevelCoordinator(ActiveBluetoothDataUpdateCoordinator[None]):
     """
     Coordinator for the EasyLevel BLE sensor.
 
-    polling_enabled and poll_interval are live attributes — entities (Switch,
-    Number) write to them directly and the next _needs_poll() call picks them
-    up.  They are also persisted to entry.options so they survive restarts.
+    The ActiveBluetoothDataUpdateCoordinator drives polling from incoming BLE
+    advertisements.  We also schedule an immediate forced poll on startup so
+    entities get data right away instead of waiting for the first advertisement.
     """
 
     def __init__(
@@ -58,11 +58,12 @@ class EasyLevelCoordinator(ActiveBluetoothDataUpdateCoordinator[None]):
             connectable=True,
         )
         self._entry = entry
+        self._ble_device = ble_device
         self.parser = EasyLevelParser(smoothing_window=5)
         self._last_poll_ok = False
         self.firmware_info: str | None = None
 
-        # Live state — initialised from persisted options
+        # Live state — written by Switch/Number entities, persisted via async_save_options
         self.polling_enabled: bool = entry.options.get(
             CONF_POLLING_ENABLED, DEFAULT_POLLING_ENABLED
         )
@@ -70,10 +71,10 @@ class EasyLevelCoordinator(ActiveBluetoothDataUpdateCoordinator[None]):
             entry.options.get(CONF_POLL_INTERVAL, DEFAULT_POLL_INTERVAL)
         )
 
-    # ── Persist current live state back to entry.options ──────────────────────
+    # ── Persist current live state to entry.options ───────────────────────────
 
     async def async_save_options(self) -> None:
-        """Write current live state to config entry options (survives restart)."""
+        """Persist polling state so it survives HA restart."""
         self.hass.config_entries.async_update_entry(
             self._entry,
             options={
@@ -82,7 +83,20 @@ class EasyLevelCoordinator(ActiveBluetoothDataUpdateCoordinator[None]):
             },
         )
 
-    # ── Poll scheduling ───────────────────────────────────────────────────────
+    # ── Immediate startup poll (doesn't wait for advertisement) ──────────────
+
+    async def async_poll_now(self) -> None:
+        """Force an immediate GATT poll using the device address we already have."""
+        _LOGGER.debug("EasyLevel: startup poll — connecting to %s", self._ble_device.address)
+
+        # Refresh the device handle from the BT stack (may have updated since init)
+        device = bluetooth.async_ble_device_from_address(
+            self.hass, self._ble_device.address, connectable=True
+        ) or self._ble_device
+
+        await self._connect_and_read(device)
+
+    # ── Poll scheduling (advertisement-driven) ────────────────────────────────
 
     @callback
     def _needs_poll(
@@ -102,68 +116,90 @@ class EasyLevelCoordinator(ActiveBluetoothDataUpdateCoordinator[None]):
             return True
         return seconds_since_last_poll >= self.poll_interval
 
-    # ── Active poll ───────────────────────────────────────────────────────────
-
     async def _async_poll(
         self, service_info: bluetooth.BluetoothServiceInfoBleak
     ) -> None:
         device = bluetooth.async_ble_device_from_address(
             self.hass, service_info.device.address, connectable=True
         ) or service_info.device
+        await self._connect_and_read(device)
 
-        _LOGGER.debug(
-            "EasyLevel: connecting to %s (interval=%ds, enabled=%s)",
-            device.address, self.poll_interval, self.polling_enabled,
-        )
+    # ── Shared GATT connect + notify logic ───────────────────────────────────
 
+    async def _connect_and_read(self, device) -> None:
+        """Connect via GATT, collect 2s of notifications, update entities."""
+        _LOGGER.debug("EasyLevel: connecting to %s", device.address)
         try:
-            async with BleakClient(device) as client:
+            async with BleakClient(device, timeout=15.0) as client:
+                # One-time firmware read
                 if self.firmware_info is None:
                     try:
-                        raw_info = await client.read_gatt_char(CHAR_DEVICE_INFO)
-                        self.firmware_info = raw_info.hex("-")
+                        raw = await client.read_gatt_char(CHAR_DEVICE_INFO)
+                        self.firmware_info = raw.hex("-")
+                        _LOGGER.debug("EasyLevel: firmware info: %s", self.firmware_info)
                     except BleakError as err:
-                        _LOGGER.debug("EasyLevel: device info error: %s", err)
+                        _LOGGER.debug("EasyLevel: device info unavailable: %s", err)
 
-                packet_queue: asyncio.Queue[bytes] = asyncio.Queue()
+                # Collect notifications via queue (Bleak callback is not async-safe)
+                queue: asyncio.Queue[bytes] = asyncio.Queue()
 
-                def _handle_notify(_sender, data: bytearray) -> None:
+                def _on_notify(_sender, data: bytearray) -> None:
                     try:
-                        packet_queue.put_nowait(bytes(data))
+                        queue.put_nowait(bytes(data))
                     except asyncio.QueueFull:
                         pass
 
-                await client.start_notify(CHAR_ACCEL, _handle_notify)
+                await client.start_notify(CHAR_ACCEL, _on_notify)
+                _LOGGER.debug("EasyLevel: collecting notifications for 2s…")
+
                 deadline = asyncio.get_event_loop().time() + 2.0
+                packets = 0
                 while True:
                     remaining = deadline - asyncio.get_event_loop().time()
                     if remaining <= 0:
                         break
                     try:
-                        raw = await asyncio.wait_for(packet_queue.get(), timeout=remaining)
+                        raw = await asyncio.wait_for(queue.get(), timeout=remaining)
                         self.parser.update(raw)
+                        packets += 1
                     except asyncio.TimeoutError:
                         break
 
                 await client.stop_notify(CHAR_ACCEL)
                 self._last_poll_ok = True
+
                 _LOGGER.debug(
-                    "EasyLevel: poll done — pitch=%.2f°  roll=%.2f°",
-                    self.parser.pitch or 0.0, self.parser.roll or 0.0,
+                    "EasyLevel: poll done — %d packets, pitch=%.2f°, roll=%.2f°",
+                    packets,
+                    self.parser.pitch or 0.0,
+                    self.parser.roll or 0.0,
                 )
+
+                # Notify all subscribed entities — MUST be called from event loop
                 self.async_set_updated_data(None)
 
         except BleakError as err:
             self._last_poll_ok = False
-            _LOGGER.warning("EasyLevel: BLE error: %s", err)
+            _LOGGER.warning("EasyLevel: BLE connection failed: %s", err)
         except asyncio.TimeoutError:
             self._last_poll_ok = False
-            _LOGGER.warning("EasyLevel: connection timed out")
+            _LOGGER.warning("EasyLevel: connection timed out after 15s")
+        except Exception as err:
+            self._last_poll_ok = False
+            _LOGGER.error("EasyLevel: unexpected error during poll: %s", err)
+
+    # ── Advertisement / unavailable callbacks ─────────────────────────────────
 
     @callback
-    def _async_handle_bluetooth_event(self, service_info, change) -> None:
-        pass
+    def _async_handle_bluetooth_event(
+        self,
+        service_info: bluetooth.BluetoothServiceInfoBleak,
+        change: bluetooth.BluetoothChange,
+    ) -> None:
+        """Passive advertisement — data arrives via active poll above."""
 
     @callback
-    def _async_handle_unavailable(self, service_info) -> None:
-        _LOGGER.debug("EasyLevel: device unavailable (%s)", service_info.address)
+    def _async_handle_unavailable(
+        self, service_info: bluetooth.BluetoothServiceInfoBleak
+    ) -> None:
+        _LOGGER.debug("EasyLevel: device out of range (%s)", service_info.address)
