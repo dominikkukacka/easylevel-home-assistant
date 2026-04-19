@@ -42,7 +42,15 @@ KEY_SIGNAL_STRENGTH = "signal_strength"
 # Nominal 1g in raw accelerometer counts (2^14 = 16384 for a ±2g 14-bit sensor)
 ONE_G_RAW = 16384.0
 
-# ── Polling ───────────────────────────────────────────────────────────────────
+# ── Options (user-configurable, stored in entry.options) ─────────────────────
 
-# How often (seconds) to reconnect and re-subscribe when connection is lost
-POLL_INTERVAL = 30
+CONF_POLLING_ENABLED  = "polling_enabled"
+CONF_POLL_INTERVAL    = "poll_interval"
+
+# Defaults
+DEFAULT_POLLING_ENABLED = True
+DEFAULT_POLL_INTERVAL   = 30    # seconds
+
+# Limits for the options form
+MIN_POLL_INTERVAL = 5
+MAX_POLL_INTERVAL = 3600

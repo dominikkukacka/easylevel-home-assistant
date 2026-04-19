@@ -35,16 +35,32 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass=hass,
         logger=_LOGGER,
         ble_device=ble_device,
+        entry=entry,
     )
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
-    # Start coordinator *after* platforms are set up so entities can subscribe first
+    # Start coordinator *after* platforms have subscribed
     entry.async_on_unload(coordinator.async_start())
 
+    # Re-read options whenever the user changes them (no restart needed)
+    entry.async_on_unload(entry.add_update_listener(_async_update_listener))
+
     return True
+
+
+async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Handle options update — coordinator reads options live, nothing to reload."""
+    coordinator: EasyLevelCoordinator = hass.data[DOMAIN][entry.entry_id]
+    _LOGGER.debug(
+        "EasyLevel: options updated — polling_enabled=%s  interval=%ds",
+        coordinator.polling_enabled,
+        coordinator.poll_interval,
+    )
+    # The coordinator properties read from entry.options directly,
+    # so changes take effect on the very next poll cycle automatically.
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

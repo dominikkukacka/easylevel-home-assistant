@@ -17,5 +17,21 @@
       "already_configured": "This EasyLevel device is already configured.",
       "no_devices_found": "No EasyLevel (CARATI*) devices found nearby. Make sure the sensor is powered on and within Bluetooth range, then try again."
     }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "EasyLevel Options",
+        "description": "Configure how often the sensor is polled. Minimum interval: {min_interval}s, maximum: {max_interval}s.",
+        "data": {
+          "polling_enabled": "Enable polling",
+          "poll_interval": "Poll interval (seconds)"
+        },
+        "data_description": {
+          "polling_enabled": "When disabled, the integration stops connecting to the sensor. Existing sensor values are kept but will no longer update.",
+          "poll_interval": "How often (in seconds) to connect and read a fresh tilt reading. Lower values update more frequently but use more battery. Range: {min_interval}–{max_interval} seconds."
+        }
+      }
+    }
   }
 }

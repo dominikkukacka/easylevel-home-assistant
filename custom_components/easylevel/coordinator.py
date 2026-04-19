@@ -13,9 +13,17 @@ from homeassistant.components import bluetooth
 from homeassistant.components.bluetooth.active_update_coordinator import (
     ActiveBluetoothDataUpdateCoordinator,
 )
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import CoreState, HomeAssistant, callback
 
-from .const import CHAR_ACCEL, CHAR_CALIB_STATIC, CHAR_DEVICE_INFO, POLL_INTERVAL
+from .const import (
+    CHAR_ACCEL,
+    CHAR_DEVICE_INFO,
+    CONF_POLL_INTERVAL,
+    CONF_POLLING_ENABLED,
+    DEFAULT_POLL_INTERVAL,
+    DEFAULT_POLLING_ENABLED,
+)
 from .sensor_data import EasyLevelParser
 
 if TYPE_CHECKING:
@@ -31,11 +39,11 @@ class EasyLevelCoordinator(ActiveBluetoothDataUpdateCoordinator[None]):
     Strategy:
     - Passive: listens for BLE advertisements to detect when device is nearby.
     - Active poll: when an advertisement arrives (and poll is needed), connects
-      via GATT, subscribes to NOTIFY on CHAR_ACCEL, collects ~1s of readings,
+      via GATT, subscribes to NOTIFY on CHAR_ACCEL, collects ~2s of readings,
       then disconnects.  HA sensors are updated on each notify callback.
 
-    The sensor sends notifications at ~30 Hz.  We reconnect every POLL_INTERVAL
-    seconds when the device is in range.
+    Polling can be disabled entirely (sensor becomes read-only / shows last known
+    value) and the interval is configurable via the integration's options flow.
     """
 
     def __init__(
@@ -43,6 +51,7 @@ class EasyLevelCoordinator(ActiveBluetoothDataUpdateCoordinator[None]):
         hass: HomeAssistant,
         logger: logging.Logger,
         ble_device: BLEDevice,
+        entry: ConfigEntry,
     ) -> None:
         """Initialise the coordinator."""
         super().__init__(
@@ -54,9 +63,22 @@ class EasyLevelCoordinator(ActiveBluetoothDataUpdateCoordinator[None]):
             mode=bluetooth.BluetoothScanningMode.ACTIVE,
             connectable=True,
         )
+        self._entry = entry
         self.parser = EasyLevelParser(smoothing_window=5)
         self._last_poll_ok = False
         self.firmware_info: str | None = None
+
+    # ── Options helpers ───────────────────────────────────────────────────────
+
+    @property
+    def polling_enabled(self) -> bool:
+        """Return whether active polling is enabled (from options)."""
+        return self._entry.options.get(CONF_POLLING_ENABLED, DEFAULT_POLLING_ENABLED)
+
+    @property
+    def poll_interval(self) -> int:
+        """Return poll interval in seconds (from options)."""
+        return int(self._entry.options.get(CONF_POLL_INTERVAL, DEFAULT_POLL_INTERVAL))
 
     # ── Poll scheduling ───────────────────────────────────────────────────────
 
@@ -67,16 +89,19 @@ class EasyLevelCoordinator(ActiveBluetoothDataUpdateCoordinator[None]):
         seconds_since_last_poll: float | None,
     ) -> bool:
         """Return True when we want to make an active connection."""
+        if not self.polling_enabled:
+            _LOGGER.debug("EasyLevel: polling disabled, skipping")
+            return False
         if self.hass.state != CoreState.running:
             return False
         if not bluetooth.async_ble_device_from_address(
             self.hass, service_info.device.address, connectable=True
         ):
             return False
-        # Poll immediately on first contact, then every POLL_INTERVAL seconds
+        # Poll immediately on first contact, then every poll_interval seconds
         if seconds_since_last_poll is None:
             return True
-        return seconds_since_last_poll >= POLL_INTERVAL
+        return seconds_since_last_poll >= self.poll_interval
 
     # ── Active poll — GATT connect + notify ───────────────────────────────────
 
@@ -90,11 +115,15 @@ class EasyLevelCoordinator(ActiveBluetoothDataUpdateCoordinator[None]):
             self.hass, service_info.device.address, connectable=True
         ) or service_info.device
 
-        _LOGGER.debug("EasyLevel: connecting to %s", device.address)
+        _LOGGER.debug(
+            "EasyLevel: connecting to %s (interval=%ds)",
+            device.address,
+            self.poll_interval,
+        )
 
         try:
             async with BleakClient(device) as client:
-                # One-time device info read (only needed once)
+                # One-time device info read
                 if self.firmware_info is None:
                     try:
                         raw_info = await client.read_gatt_char(CHAR_DEVICE_INFO)
@@ -105,9 +134,6 @@ class EasyLevelCoordinator(ActiveBluetoothDataUpdateCoordinator[None]):
                     except BleakError as err:
                         _LOGGER.debug("EasyLevel: could not read device info: %s", err)
 
-                # Collect notify packets for ~2 seconds then disconnect
-                # The sensor fires ~30 packets/s so we'll get ~60 readings
-                notify_event = asyncio.Event()
                 packets_received = 0
 
                 def _handle_notify(sender, data: bytearray) -> None:
@@ -121,7 +147,6 @@ class EasyLevelCoordinator(ActiveBluetoothDataUpdateCoordinator[None]):
                             self.parser.roll,
                             parsed.gravity_magnitude,
                         )
-                        # Trigger HA entity updates
                         self.async_set_updated_data(None)
 
                 await client.start_notify(CHAR_ACCEL, _handle_notify)
@@ -146,7 +171,7 @@ class EasyLevelCoordinator(ActiveBluetoothDataUpdateCoordinator[None]):
             self._last_poll_ok = False
             _LOGGER.warning("EasyLevel: connection timed out")
 
-    # ── Advertisement handler (passive — no data, just keep-alive) ────────────
+    # ── Advertisement handler ─────────────────────────────────────────────────
 
     @callback
     def _async_handle_bluetooth_event(
@@ -154,10 +179,7 @@ class EasyLevelCoordinator(ActiveBluetoothDataUpdateCoordinator[None]):
         service_info: bluetooth.BluetoothServiceInfoBleak,
         change: bluetooth.BluetoothChange,
     ) -> None:
-        """Handle incoming BLE advertisement (passive — data comes from active poll)."""
-        # We don't parse advertisement payloads for this device;
-        # data comes from the active GATT poll above.
-        # This callback is required by the base class.
+        """Handle incoming BLE advertisement (data comes from active poll)."""
 
     @callback
     def _async_handle_unavailable(
