@@ -1,19 +1,25 @@
 {
   "domain": "easylevel",
   "name": "EasyLevel",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "config_flow": true,
-  "dependencies": ["bluetooth"],
+  "dependencies": [
+    "bluetooth"
+  ],
   "bluetooth": [
     {
       "local_name": "CARATI*"
     }
   ],
-  "codeowners": ["@dominikkukacka"],
+  "codeowners": [
+    "@dominikkukacka"
+  ],
   "documentation": "https://github.com/dominikkukacka/easylevel-home-assistant",
   "issue_tracker": "https://github.com/dominikkukacka/easylevel-home-assistant/issues",
   "homeassistant": "2024.1.0",
   "integration_type": "device",
   "iot_class": "local_push",
-  "requirements": []
+  "requirements": [
+    "bleak-retry-connector>=3.0.0"
+  ]
 }

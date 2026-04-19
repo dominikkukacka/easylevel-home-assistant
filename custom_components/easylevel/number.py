@@ -1,4 +1,4 @@
-"""EasyLevel number platform — poll interval slider."""
+"""EasyLevel number — poll interval."""
 
 from __future__ import annotations
 
@@ -7,10 +7,10 @@ import logging
 from homeassistant.components.number import NumberEntity, NumberMode
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfTime
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.helpers.restore_state import RestoreEntity
 
 from .const import DOMAIN, MAX_POLL_INTERVAL, MIN_POLL_INTERVAL
 from .coordinator import EasyLevelCoordinator
@@ -27,8 +27,8 @@ async def async_setup_entry(
     async_add_entities([EasyLevelPollIntervalNumber(coordinator, entry)])
 
 
-class EasyLevelPollIntervalNumber(CoordinatorEntity[EasyLevelCoordinator], NumberEntity):
-    """Number entity for adjusting how often the sensor is polled."""
+class EasyLevelPollIntervalNumber(RestoreEntity, NumberEntity):
+    """Number entity for adjusting poll interval from the dashboard."""
 
     _attr_has_entity_name = True
     _attr_name = "Poll interval"
@@ -37,10 +37,11 @@ class EasyLevelPollIntervalNumber(CoordinatorEntity[EasyLevelCoordinator], Numbe
     _attr_native_min_value = MIN_POLL_INTERVAL
     _attr_native_max_value = MAX_POLL_INTERVAL
     _attr_native_step = 5
-    _attr_mode = NumberMode.BOX   # free-type input; change to SLIDER if preferred
+    _attr_mode = NumberMode.BOX
+    _attr_should_poll = False
 
     def __init__(self, coordinator: EasyLevelCoordinator, entry: ConfigEntry) -> None:
-        super().__init__(coordinator)
+        self._coordinator = coordinator
         self._attr_unique_id = f"{entry.unique_id}_poll_interval"
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, entry.unique_id)},
@@ -49,16 +50,16 @@ class EasyLevelPollIntervalNumber(CoordinatorEntity[EasyLevelCoordinator], Numbe
             model="EasyLevel Sensor",
         )
 
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        self._attr_available = True
+
     @property
     def native_value(self) -> float:
-        return float(self.coordinator.poll_interval)
+        return float(self._coordinator.poll_interval)
 
     async def async_set_native_value(self, value: float) -> None:
-        self.coordinator.poll_interval = int(value)
-        await self.coordinator.async_save_options()
+        self._coordinator.poll_interval = int(value)
+        await self._coordinator.async_save_options()
         self.async_write_ha_state()
-        _LOGGER.debug("EasyLevel: poll interval set to %ds", self.coordinator.poll_interval)
-
-    @callback
-    def _handle_coordinator_update(self) -> None:
-        self.async_write_ha_state()
+        _LOGGER.debug("EasyLevel: poll interval → %ds", self._coordinator.poll_interval)
